@@ -21,31 +21,50 @@ object pagerank {
 
     // Initialize a random graph with 10 vertices
     val graph: Graph[Long, Double] =
-      GraphGenerators.logNormalGraph(sc, numVertices = 10).mapEdges( e => (new scala.util.Random).nextInt(100) ).mapEdges(e => e.attr.toDouble)
+      GraphGenerators.logNormalGraph(sc, numVertices = 10).mapEdges( e => ((new scala.util.Random).nextInt(10000))/10000.0 ).mapEdges(e => e.attr.toDouble)
     graph.edges.foreach(println)
     //val sourceId: VertexId = 0 // The ultimate source
 
+    val tmp = graph.outerJoinVertices(graph.outDegrees) {
+      (vid, vdata, deg) => deg.getOrElse(0)
+    }
+    val edgetmp = tmp.mapTriplets( e => 1.0/e.srcAttr )
+
     // Initialize the graph such that all vertices except the root have distance infinity.
-    val initialGraph = graph.mapVertices((id, _) => if (id == sourceId) 0.0 else Double.PositiveInfinity)
+    val initialGraph = edgetmp.mapVertices( (id, attr) => (1.0,1.0) )
 
-    val sssp = initialGraph.pregel(Double.PositiveInfinity)(
-      // Vertex Program
-      (id, dist, newDist) => math.min(dist, newDist),
+    //initialGraph.vertices.foreach(println)
 
-      // Send Message
-      triplet => {
-        if (triplet.srcAttr + triplet.attr < triplet.dstAttr) {
-          Iterator((triplet.dstId, triplet.srcAttr + triplet.attr))
-        } else {
-          Iterator.empty
-        }
-      },
 
-      //Merge Message
-      (a, b) => math.min(a, b)
-    )
+    val resetProb = 0.15
+    val initialMessage = 10.0
+    val numIter = Int.MaxValue
+    val tol = 0.01
 
-    println(sssp.vertices.collect.mkString("\n"))
+
+    def vertexProgram(id: VertexId, attr: (Double, Double), msgSum: Double): (Double, Double) = {
+      val (oldPR, lastDelta) = attr
+      println(msgSum)
+      val newPR = resetProb + (1.0 - resetProb) * msgSum
+      (newPR, newPR - oldPR)
+    }
+    def sendMessage(edge: EdgeTriplet[(Double, Double), Double]): Iterator[(VertexId, Double)] = {
+      if(edge.srcAttr._2 > tol) {
+        Iterator((edge.dstId, edge.srcAttr._1 * edge.attr))
+
+      }
+      else {
+        //print(edge.srcAttr)
+        Iterator.empty
+        //Iterator((edge.dstId, edge.srcAttr._1 * edge.attr))
+      }
+    }
+    def messageCombiner(a: Double, b: Double): Double = a + b
+
+
+    val pageRankGraph = Pregel(initialGraph,initialMessage,numIter)(vertexProgram, sendMessage, messageCombiner)
+
+    println(pageRankGraph.vertices.collect.mkString("\n"))
   }
 
 }
